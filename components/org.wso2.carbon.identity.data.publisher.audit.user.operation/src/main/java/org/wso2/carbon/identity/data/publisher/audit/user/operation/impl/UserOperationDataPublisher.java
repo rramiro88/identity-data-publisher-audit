@@ -18,7 +18,6 @@
 
 package org.wso2.carbon.identity.data.publisher.audit.user.operation.impl;
 
-import com.google.gson.Gson;
 import org.apache.commons.lang.StringUtils;
 import org.apache.commons.logging.Log;
 import org.apache.commons.logging.LogFactory;
@@ -28,23 +27,30 @@ import org.wso2.carbon.identity.core.util.IdentityTenantUtil;
 import org.wso2.carbon.identity.data.publisher.audit.common.AuditDataPublisherConstants;
 import org.wso2.carbon.identity.data.publisher.audit.common.AuditDataPublisherUtils;
 import org.wso2.carbon.identity.data.publisher.audit.user.operation.internal.UserOperationDataPublisherDataHolder;
+import org.wso2.carbon.identity.data.publisher.audit.user.operation.model.AttributesHolder;
 import org.wso2.carbon.identity.data.publisher.audit.user.operation.model.UserData;
 import org.wso2.carbon.identity.event.IdentityEventConstants;
 import org.wso2.carbon.identity.event.IdentityEventException;
 import org.wso2.carbon.identity.event.event.Event;
 import org.wso2.carbon.identity.event.handler.AbstractEventHandler;
 import org.wso2.carbon.user.core.UserCoreConstants;
+import org.wso2.carbon.user.core.UserStoreException;
 import org.wso2.carbon.user.core.UserStoreManager;
 import org.wso2.carbon.user.core.util.UserCoreUtil;
 import org.wso2.carbon.utils.multitenancy.MultitenantConstants;
 
+import java.util.Arrays;
 import java.util.HashMap;
+import java.util.HashSet;
 import java.util.Map;
+import java.util.Objects;
+import java.util.Set;
 
 /**
  * Publisher for user related operations.
  */
 public class UserOperationDataPublisher extends AbstractEventHandler {
+
     private static final Log log = LogFactory.getLog(UserOperationDataPublisher.class);
 
     @Override
@@ -64,6 +70,8 @@ public class UserOperationDataPublisher extends AbstractEventHandler {
             case IdentityEventConstants.Event.POST_SET_USER_CLAIMS:
                 handleSetUserClaims(event);
                 break;
+            case IdentityEventConstants.Event.PRE_SET_USER_CLAIMS:
+                handleSetUserClaims(event);
             default:
                 if (log.isDebugEnabled()) {
                     log.debug("Ignored unsupported event " + event.getEventName());
@@ -92,8 +100,7 @@ public class UserOperationDataPublisher extends AbstractEventHandler {
         if (claims == null) {
             claims = new HashMap();
         }
-        userData.setClaims(new Gson().toJson(claims));
-
+        userData.setClaims(claims);
         publishUserData(userData);
     }
 
@@ -135,9 +142,43 @@ public class UserOperationDataPublisher extends AbstractEventHandler {
         if (claims == null) {
             claims = new HashMap();
         }
-        userData.setClaims(new Gson().toJson(claims));
+        AttributesHolder claimsHolder = new AttributesHolder(claims);
+        userData.setClaims(claimsHolder);
+        UserStoreManager userStoreManager = (UserStoreManager) event.getEventProperties()
+                .get(IdentityEventConstants.EventProperty.USER_STORE_MANAGER);
+        try {
+            Map<String, String> attributesMap = new HashMap<>();
+            Map<String, String> claimValues = userStoreManager.getUserClaimValues(userData.getUsername(),
+                    new String[]{Constants.ACCOUNT_NUMBER, Constants.LOCKED_REASON, Constants.ACCOUNT_LOCK,
+                            Constants.ACCOUNT_STATE}, "default");
+            if (Objects.equals(Constants.PATRON_USER_STORE, userData.getUserStoreDomain())) {
+                attributesMap.put(Constants.ACCOUNT_NUMBER_ATTRIBUTE_NAME, claimValues.get(Constants.ACCOUNT_NUMBER));
+            }
+            String lockedReason = claimValues.get(Constants.LOCKED_REASON);
+            String accountLock = claimValues.get(Constants.ACCOUNT_LOCK);
+            String accountStateEventClaim = (String) claims.get(Constants.ACCOUNT_STATE);
+            if(StringUtils.isNotEmpty(accountStateEventClaim)) {
+                attributesMap.put(Constants.ACCOUNT_STATE, accountStateEventClaim);
+                if(StringUtils.isNotEmpty(lockedReason)) {
+                    attributesMap.put(Constants.LOCKED_REASON_ATTRIBUTE_NAME, lockedReason);
+                }
+            }
+            userData.setAttributes(new AttributesHolder(attributesMap));
+            boolean isLockOrUnlock = StringUtils.isNotEmpty(accountStateEventClaim) &&
+                    ((StringUtils.equals(accountLock, "true") && StringUtils.isNotEmpty(lockedReason))
+                    ||
+                    (StringUtils.equals(accountLock, "false") && StringUtils.isEmpty(lockedReason)));
 
-        publishUserData(userData);
+
+            boolean isNotLockRelatedEvent = StringUtils.isEmpty(accountStateEventClaim)
+                    && !claims.containsKey(Constants.LOCKED_REASON)
+                    && !claims.containsKey(Constants.ACCOUNT_LOCK);
+            if(isLockOrUnlock || isNotLockRelatedEvent) {
+                publishUserData(userData);
+            }
+        } catch (UserStoreException e) {
+            log.error("Error getting claims", e);
+        }
     }
 
     /**
@@ -147,20 +188,22 @@ public class UserOperationDataPublisher extends AbstractEventHandler {
      */
     private void publishUserData(UserData userData) {
 
-        Object[] payloadData = new Object[10];
+        Object[] payloadData = new Object[11];
         payloadData[0] = userData.getAction();
         payloadData[1] = userData.getUsername();
-        payloadData[2] = userData.getUserStoreDomain();
-        payloadData[3] = userData.getTenantDomain();
-        payloadData[4] = userData.getNewRoleList();
-        payloadData[5] = userData.getDeletedRoleList();
-        payloadData[6] = userData.getClaims();
-        payloadData[7] = userData.getProfile();
-        payloadData[8] = userData.getActionHolder();
-        payloadData[9] = userData.getActionTimestamp();
+        payloadData[2] = userData.getAttributes();
+        payloadData[3] = userData.getUserStoreDomain();
+        payloadData[4] = userData.getTenantDomain();
+        payloadData[5] = userData.getNewRoleList();
+        payloadData[6] = userData.getDeletedRoleList();
+        payloadData[7] = userData.getClaims();
+        payloadData[8] = userData.getProfile();
+        payloadData[9] = userData.getActionHolder();
+        payloadData[10] = userData.getActionTimestamp();
 
-        String[] publishingDomains = (String[]) userData.getParameter(AuditDataPublisherConstants.PUBLISHING_TENANT_DOMAINS);
-        if (publishingDomains != null && publishingDomains.length > 0) {
+        String[] publishingDomainsArray = (String[]) userData.getParameter(AuditDataPublisherConstants.PUBLISHING_TENANT_DOMAINS);
+        Set<String> publishingDomains = new HashSet<>(Arrays.asList(publishingDomainsArray));
+        if (!publishingDomains.isEmpty()) {
             try {
                 FrameworkUtils.startTenantFlow(MultitenantConstants.SUPER_TENANT_DOMAIN_NAME);
                 for (String publishingDomain : publishingDomains) {

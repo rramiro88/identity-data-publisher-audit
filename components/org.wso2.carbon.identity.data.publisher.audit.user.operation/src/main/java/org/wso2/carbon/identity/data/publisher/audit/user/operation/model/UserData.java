@@ -33,11 +33,12 @@ import java.util.Map;
 public class UserData<T1 extends Object, T2 extends Object> {
     private String action;
     private String username;
+    private Object attributes;
     private String userStoreDomain;
     private String tenantDomain;
     private String newRoleList;
     private String deletedRoleList;
-    private String claims;
+    private Object claims;
     private String profile;
     private String actionHolder;
     private long actionTimestamp;
@@ -57,6 +58,14 @@ public class UserData<T1 extends Object, T2 extends Object> {
 
     public void setUsername(String username) {
         this.username = username;
+    }
+
+    public Object getAttributes() {
+        return attributes;
+    }
+
+    public void setAttributes(Object attributes) {
+        this.attributes = attributes;
     }
 
     public String getUserStoreDomain() {
@@ -91,11 +100,11 @@ public class UserData<T1 extends Object, T2 extends Object> {
         this.deletedRoleList = deletedRoleList;
     }
 
-    public String getClaims() {
+    public Object getClaims() {
         return claims;
     }
 
-    public void setClaims(String claims) {
+    public void setClaims(Object claims) {
         this.claims = claims;
     }
 
