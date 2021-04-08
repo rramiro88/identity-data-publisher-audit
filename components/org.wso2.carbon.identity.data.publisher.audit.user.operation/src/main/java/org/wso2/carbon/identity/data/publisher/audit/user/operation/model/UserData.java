@@ -33,7 +33,7 @@ import java.util.Map;
 public class UserData<T1 extends Object, T2 extends Object> {
     private String action;
     private String username;
-    private Object attributes;
+    private AttributesHolder attributes;
     private String userStoreDomain;
     private String tenantDomain;
     private String newRoleList;
@@ -60,11 +60,11 @@ public class UserData<T1 extends Object, T2 extends Object> {
         this.username = username;
     }
 
-    public Object getAttributes() {
+    public AttributesHolder getAttributes() {
         return attributes;
     }
 
-    public void setAttributes(Object attributes) {
+    public void setAttributes(AttributesHolder attributes) {
         this.attributes = attributes;
     }
 

@@ -18,11 +18,13 @@
 
 package org.wso2.carbon.identity.data.publisher.audit.user.operation.impl;
 
+import com.google.gson.Gson;
 import org.apache.commons.lang.StringUtils;
 import org.apache.commons.logging.Log;
 import org.apache.commons.logging.LogFactory;
 import org.wso2.carbon.context.CarbonContext;
 import org.wso2.carbon.identity.application.authentication.framework.util.FrameworkUtils;
+import org.wso2.carbon.identity.application.common.model.User;
 import org.wso2.carbon.identity.core.util.IdentityTenantUtil;
 import org.wso2.carbon.identity.data.publisher.audit.common.AuditDataPublisherConstants;
 import org.wso2.carbon.identity.data.publisher.audit.common.AuditDataPublisherUtils;
@@ -42,6 +44,7 @@ import org.wso2.carbon.utils.multitenancy.MultitenantConstants;
 import java.util.Arrays;
 import java.util.HashMap;
 import java.util.HashSet;
+import java.util.List;
 import java.util.Map;
 import java.util.Objects;
 import java.util.Set;
@@ -68,15 +71,42 @@ public class UserOperationDataPublisher extends AbstractEventHandler {
                 handleUpdateCredential(event);
                 break;
             case IdentityEventConstants.Event.POST_SET_USER_CLAIMS:
-                handleSetUserClaims(event);
-                break;
             case IdentityEventConstants.Event.PRE_SET_USER_CLAIMS:
                 handleSetUserClaims(event);
+                break;
+            case "PRE_ACCOUNT_RECOVERY":
+                handleSendRecoveryNotification(event);
             default:
                 if (log.isDebugEnabled()) {
                     log.debug("Ignored unsupported event " + event.getEventName());
                 }
         }
+    }
+
+    /**
+     * Handles PRE_ACCOUNT_RECOVERY event
+     *
+     * @param event
+     */
+    private void handleSendRecoveryNotification(Event event) {
+
+        UserData userData = getGeneralUserData(event);
+        String username = ((User) event.getEventProperties().get("USER")).getUserName();
+        userData.setUsername(username);
+        buildAndSetAttributesMap(event, userData);
+        String type = getNotificationTypeFromEvent(event);
+        userData.getAttributes().getAttributesMap().put(Constants.NOTIFICATION_CHANNEL, type);
+        publishUserData(userData, AuditDataPublisherConstants.PASSWORD_RECOVERY_EVENT_STREAM_NAME);
+    }
+
+    private String getNotificationTypeFromEvent(Event event) {
+
+        Object notificationChannel = ((List) event.getEventProperties().get(Constants.NOTIFICATION_CHANNEL)).get(0);
+        Gson gson = new Gson();
+        String json = gson.toJson(notificationChannel);
+        Map map = gson.fromJson(json, Map.class);
+        String type = (String)map.get("type");
+        return type;
     }
 
     /**
@@ -101,7 +131,7 @@ public class UserOperationDataPublisher extends AbstractEventHandler {
             claims = new HashMap();
         }
         userData.setClaims(claims);
-        publishUserData(userData);
+        publishUserData(userData, AuditDataPublisherConstants.OVERALL_USER_DATA_EVENT_STREAM_NAME);
     }
 
     /**
@@ -112,7 +142,7 @@ public class UserOperationDataPublisher extends AbstractEventHandler {
     private void handleDeleteUser(Event event) {
 
         UserData userData = getGeneralUserData(event);
-        publishUserData(userData);
+        publishUserData(userData, AuditDataPublisherConstants.OVERALL_USER_DATA_EVENT_STREAM_NAME);
     }
 
     /**
@@ -125,7 +155,27 @@ public class UserOperationDataPublisher extends AbstractEventHandler {
     private void handleUpdateCredential(Event event) {
 
         UserData userData = getGeneralUserData(event);
-        publishUserData(userData);
+
+        buildAndSetAttributesMap(event, userData);
+
+        publishUserData(userData, AuditDataPublisherConstants.PASSWORD_RECOVERY_EVENT_STREAM_NAME);
+    }
+
+    private void buildAndSetAttributesMap(Event event, UserData userData) {
+
+        UserStoreManager userStoreManager = (UserStoreManager) event.getEventProperties()
+                .get(IdentityEventConstants.EventProperty.USER_STORE_MANAGER);
+        Map<String, String> attributesMap = new HashMap<>();
+        try {
+            Map<String, String> claimValues = userStoreManager.getUserClaimValues(userData.getUsername(),
+                    new String[]{Constants.ACCOUNT_NUMBER, Constants.USER_ID}, "default");
+            attributesMap.put(Constants.ACCOUNT_NUMBER_ATTRIBUTE_NAME, claimValues.get(Constants.ACCOUNT_NUMBER));
+            attributesMap.put(Constants.USER_ID_ATTRIBUTE_NAME, claimValues.get(Constants.USER_ID));
+            userData.setAttributes(new AttributesHolder(attributesMap));
+        } catch (UserStoreException e) {
+            log.error("Error getting claims", e);
+        }
+
     }
 
     /**
@@ -149,32 +199,33 @@ public class UserOperationDataPublisher extends AbstractEventHandler {
         try {
             Map<String, String> attributesMap = new HashMap<>();
             Map<String, String> claimValues = userStoreManager.getUserClaimValues(userData.getUsername(),
-                    new String[]{Constants.ACCOUNT_NUMBER, Constants.LOCKED_REASON, Constants.ACCOUNT_LOCK,
-                            Constants.ACCOUNT_STATE}, "default");
+                    new String[]{
+                            Constants.ACCOUNT_NUMBER, Constants.LOCKED_REASON,
+                            Constants.ACCOUNT_LOCK, Constants.ACCOUNT_STATE,Constants.USER_ID
+                    }, "default");
             if (Objects.equals(Constants.PATRON_USER_STORE, userData.getUserStoreDomain())) {
                 attributesMap.put(Constants.ACCOUNT_NUMBER_ATTRIBUTE_NAME, claimValues.get(Constants.ACCOUNT_NUMBER));
             }
+            attributesMap.put(Constants.USER_ID_ATTRIBUTE_NAME, claimValues.get(Constants.USER_ID));
             String lockedReason = claimValues.get(Constants.LOCKED_REASON);
             String accountLock = claimValues.get(Constants.ACCOUNT_LOCK);
             String accountStateEventClaim = (String) claims.get(Constants.ACCOUNT_STATE);
-            if(StringUtils.isNotEmpty(accountStateEventClaim)) {
+            if (StringUtils.isNotEmpty(accountStateEventClaim)) {
                 attributesMap.put(Constants.ACCOUNT_STATE, accountStateEventClaim);
-                if(StringUtils.isNotEmpty(lockedReason)) {
+                if (StringUtils.isNotEmpty(lockedReason)) {
                     attributesMap.put(Constants.LOCKED_REASON_ATTRIBUTE_NAME, lockedReason);
                 }
             }
             userData.setAttributes(new AttributesHolder(attributesMap));
             boolean isLockOrUnlock = StringUtils.isNotEmpty(accountStateEventClaim) &&
                     ((StringUtils.equals(accountLock, "true") && StringUtils.isNotEmpty(lockedReason))
-                    ||
-                    (StringUtils.equals(accountLock, "false") && StringUtils.isEmpty(lockedReason)));
-
-
+                            ||
+                            (StringUtils.equals(accountLock, "false") && StringUtils.isEmpty(lockedReason)));
             boolean isNotLockRelatedEvent = StringUtils.isEmpty(accountStateEventClaim)
                     && !claims.containsKey(Constants.LOCKED_REASON)
                     && !claims.containsKey(Constants.ACCOUNT_LOCK);
-            if(isLockOrUnlock || isNotLockRelatedEvent) {
-                publishUserData(userData);
+            if (isLockOrUnlock || isNotLockRelatedEvent) {
+                publishUserData(userData, AuditDataPublisherConstants.OVERALL_USER_DATA_EVENT_STREAM_NAME);
             }
         } catch (UserStoreException e) {
             log.error("Error getting claims", e);
@@ -184,9 +235,10 @@ public class UserOperationDataPublisher extends AbstractEventHandler {
     /**
      * Publish user related data to IS Analytics.
      *
-     * @param userData The user data to be published
+     * @param userData   The user data to be published
+     * @param streamName
      */
-    private void publishUserData(UserData userData) {
+    private void publishUserData(UserData userData, String streamName) {
 
         Object[] payloadData = new Object[11];
         payloadData[0] = userData.getAction();
@@ -209,7 +261,7 @@ public class UserOperationDataPublisher extends AbstractEventHandler {
                 for (String publishingDomain : publishingDomains) {
                     Object[] metadataArray = AuditDataPublisherUtils.getMetaDataArray(publishingDomain);
                     org.wso2.carbon.databridge.commons.Event event = new org.wso2.carbon.databridge.commons.Event
-                            (AuditDataPublisherConstants.OVERALL_USER_DATA_EVENT_STREAM_NAME, System
+                            (streamName, System
                                     .currentTimeMillis(), metadataArray, null, payloadData);
                     UserOperationDataPublisherDataHolder.getInstance().getPublisherService().publish(event);
                     if (log.isDebugEnabled()) {

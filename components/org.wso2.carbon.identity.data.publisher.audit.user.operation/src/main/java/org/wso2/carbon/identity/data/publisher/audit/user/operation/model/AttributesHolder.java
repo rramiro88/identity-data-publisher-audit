@@ -6,25 +6,25 @@ import java.util.Map;
 
 public class AttributesHolder {
 
-    private Map claims;
+    private Map attributesMap;
 
-    public AttributesHolder(Map claims) {
+    public AttributesHolder(Map attributes) {
 
-        this.claims = claims;
+        this.attributesMap = attributes;
     }
 
-    public Map getClaims() {
+    public Map getAttributesMap() {
 
-        return claims;
+        return attributesMap;
     }
 
-    public void setClaims(Map claims) {
+    public void setAttributesMap(Map attributesMap) {
 
-        this.claims = claims;
+        this.attributesMap = attributesMap;
     }
 
     @Override
     public String toString() {
-        return new Gson().toJson(claims);
+        return new Gson().toJson(attributesMap);
     }
 }
