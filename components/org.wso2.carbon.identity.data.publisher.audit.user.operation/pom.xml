@@ -74,6 +74,11 @@
             <groupId>org.ops4j.pax.logging</groupId>
             <artifactId>pax-logging-api</artifactId>
         </dependency>
+        <dependency>
+            <groupId>org.wso2.carbon.identity.governance</groupId>
+            <artifactId>org.wso2.carbon.identity.recovery</artifactId>
+            <version>1.4.1</version>
+        </dependency>
     </dependencies>
 
     <build>

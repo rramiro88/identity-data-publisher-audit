@@ -22,6 +22,7 @@ import com.google.gson.Gson;
 import org.apache.commons.lang.StringUtils;
 import org.apache.commons.logging.Log;
 import org.apache.commons.logging.LogFactory;
+import org.slf4j.MDC;
 import org.wso2.carbon.context.CarbonContext;
 import org.wso2.carbon.identity.application.authentication.framework.util.FrameworkUtils;
 import org.wso2.carbon.identity.application.common.model.User;
@@ -35,6 +36,7 @@ import org.wso2.carbon.identity.event.IdentityEventConstants;
 import org.wso2.carbon.identity.event.IdentityEventException;
 import org.wso2.carbon.identity.event.event.Event;
 import org.wso2.carbon.identity.event.handler.AbstractEventHandler;
+import org.wso2.carbon.identity.recovery.IdentityRecoveryConstants;
 import org.wso2.carbon.user.core.UserCoreConstants;
 import org.wso2.carbon.user.core.UserStoreException;
 import org.wso2.carbon.user.core.UserStoreManager;
@@ -76,11 +78,50 @@ public class UserOperationDataPublisher extends AbstractEventHandler {
                 break;
             case "PRE_ACCOUNT_RECOVERY":
                 handleSendRecoveryNotification(event);
+                break;
+            case "POST_GET_USER_RECOVERY_DATA":
+                handleRecoveryAttempt(event);
+                break;
             default:
                 if (log.isDebugEnabled()) {
                     log.debug("Ignored unsupported event " + event.getEventName());
                 }
         }
+    }
+
+    /**
+     * This will publish an event only if the attempt is failed
+     * @param event
+     */
+    private void handleRecoveryAttempt(Event event) {
+
+        UserData userData = new UserData();
+        userData.setAttributes(new AttributesHolder(new HashMap()));
+        userData.setAction(event.getEventName());
+        userData.setActionTimestamp(System.currentTimeMillis());
+        userData.setAction(event.getEventName());
+        userData.setUsername((String) event.getEventProperties().get(IdentityEventConstants.EventProperty.USER_NAME));
+
+        // Setting the action holder
+        String actionHolderTenantDomain = CarbonContext.getThreadLocalCarbonContext().getTenantDomain();
+        String actionHolder = CarbonContext.getThreadLocalCarbonContext().getUsername();
+        userData.setActionHolder(AuditDataPublisherUtils.getActionHolder(actionHolder, actionHolderTenantDomain));
+
+        // Adding additional properties
+        userData.addParameter(AuditDataPublisherConstants.PUBLISHING_TENANT_DOMAINS, new String[]{"carbon.super"});
+        if (event.getEventProperties().get("OPERATION_STATUS").equals(false)) {
+
+            IdentityRecoveryConstants.ErrorMessages errorMessage =
+                    (IdentityRecoveryConstants.ErrorMessages) event.getEventProperties().get("OPERATION_DESCRIPTION");
+            if (errorMessage.equals(IdentityRecoveryConstants.ErrorMessages.ERROR_CODE_EXPIRED_CODE)
+                    || errorMessage.equals(IdentityRecoveryConstants.ErrorMessages.ERROR_CODE_INVALID_CODE)) {
+                userData.getAttributes().getAttributesMap().put("status", "FAILED");
+                userData.getAttributes().getAttributesMap().put("reason",
+                        event.getEventProperties().get("OPERATION_DESCRIPTION"));
+                publishUserData(userData, AuditDataPublisherConstants.PASSWORD_RECOVERY_EVENT_STREAM_NAME);
+            }
+        }
+
     }
 
     /**
@@ -94,6 +135,7 @@ public class UserOperationDataPublisher extends AbstractEventHandler {
         String username = ((User) event.getEventProperties().get("USER")).getUserName();
         userData.setUsername(username);
         buildAndSetAttributesMap(event, userData);
+        retrieveAndSetRequestData(userData);
         String type = getNotificationTypeFromEvent(event);
         userData.getAttributes().getAttributesMap().put(Constants.NOTIFICATION_CHANNEL, type);
         publishUserData(userData, AuditDataPublisherConstants.PASSWORD_RECOVERY_EVENT_STREAM_NAME);
@@ -157,8 +199,18 @@ public class UserOperationDataPublisher extends AbstractEventHandler {
         UserData userData = getGeneralUserData(event);
 
         buildAndSetAttributesMap(event, userData);
+        retrieveAndSetRequestData(userData);
 
         publishUserData(userData, AuditDataPublisherConstants.PASSWORD_RECOVERY_EVENT_STREAM_NAME);
+    }
+
+    private void retrieveAndSetRequestData(UserData userData) {
+        String remoteAddress = MDC.get("remoteAddress");
+        String browserAgent = MDC.get("User-Agent");
+
+        userData.getAttributes().getAttributesMap().put("ipAddress", remoteAddress);
+        userData.getAttributes().getAttributesMap().put("browserAgent", browserAgent);
+
     }
 
     private void buildAndSetAttributesMap(Event event, UserData userData) {
@@ -217,6 +269,7 @@ public class UserOperationDataPublisher extends AbstractEventHandler {
                 }
             }
             userData.setAttributes(new AttributesHolder(attributesMap));
+            retrieveAndSetRequestData(userData);
             boolean isLockOrUnlock = StringUtils.isNotEmpty(accountStateEventClaim) &&
                     ((StringUtils.equals(accountLock, "true") && StringUtils.isNotEmpty(lockedReason))
                             ||
