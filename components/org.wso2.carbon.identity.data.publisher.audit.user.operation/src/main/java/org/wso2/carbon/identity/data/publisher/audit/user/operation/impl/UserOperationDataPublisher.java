@@ -72,9 +72,9 @@ public class UserOperationDataPublisher extends AbstractEventHandler {
             case IdentityEventConstants.Event.POST_UPDATE_CREDENTIAL_BY_ADMIN:
                 handleUpdateCredential(event);
                 break;
-            case IdentityEventConstants.Event.POST_SET_USER_CLAIMS:
-            case IdentityEventConstants.Event.PRE_SET_USER_CLAIMS:
-                handleSetUserClaims(event);
+            case "POST_LOCK_ACCOUNT":
+            case "POST_UNLOCK_ACCOUNT":
+                handleLockUnlock(event);
                 break;
             case "PRE_ACCOUNT_RECOVERY":
                 handleSendRecoveryNotification(event);
@@ -235,7 +235,7 @@ public class UserOperationDataPublisher extends AbstractEventHandler {
      *
      * @param event The event related to the set user claims.
      */
-    private void handleSetUserClaims(Event event) {
+    private void handleLockUnlock(Event event) {
 
         UserData userData = getGeneralUserData(event);
 
@@ -253,33 +253,18 @@ public class UserOperationDataPublisher extends AbstractEventHandler {
             Map<String, String> claimValues = userStoreManager.getUserClaimValues(userData.getUsername(),
                     new String[]{
                             Constants.ACCOUNT_NUMBER, Constants.LOCKED_REASON,
-                            Constants.ACCOUNT_LOCK, Constants.ACCOUNT_STATE,Constants.USER_ID
+                            Constants.ACCOUNT_LOCK,Constants.USER_ID
                     }, "default");
+
+            attributesMap.put(Constants.ACCOUNT_LOCK_ATTRIBUTE_NAME, claimValues.get(Constants.ACCOUNT_LOCK));
             if (Objects.equals(Constants.PATRON_USER_STORE, userData.getUserStoreDomain())) {
                 attributesMap.put(Constants.ACCOUNT_NUMBER_ATTRIBUTE_NAME, claimValues.get(Constants.ACCOUNT_NUMBER));
             }
             attributesMap.put(Constants.USER_ID_ATTRIBUTE_NAME, claimValues.get(Constants.USER_ID));
-            String lockedReason = claimValues.get(Constants.LOCKED_REASON);
-            String accountLock = claimValues.get(Constants.ACCOUNT_LOCK);
-            String accountStateEventClaim = (String) claims.get(Constants.ACCOUNT_STATE);
-            if (StringUtils.isNotEmpty(accountStateEventClaim)) {
-                attributesMap.put(Constants.ACCOUNT_STATE, accountStateEventClaim);
-                if (StringUtils.isNotEmpty(lockedReason)) {
-                    attributesMap.put(Constants.LOCKED_REASON_ATTRIBUTE_NAME, lockedReason);
-                }
-            }
+            attributesMap.put(Constants.LOCKED_REASON_ATTRIBUTE_NAME, claimValues.get(Constants.LOCKED_REASON));
             userData.setAttributes(new AttributesHolder(attributesMap));
             retrieveAndSetRequestData(userData);
-            boolean isLockOrUnlock = StringUtils.isNotEmpty(accountStateEventClaim) &&
-                    ((StringUtils.equals(accountLock, "true") && StringUtils.isNotEmpty(lockedReason))
-                            ||
-                            (StringUtils.equals(accountLock, "false") && StringUtils.isEmpty(lockedReason)));
-            boolean isNotLockRelatedEvent = StringUtils.isEmpty(accountStateEventClaim)
-                    && !claims.containsKey(Constants.LOCKED_REASON)
-                    && !claims.containsKey(Constants.ACCOUNT_LOCK);
-            if (isLockOrUnlock || isNotLockRelatedEvent) {
-                publishUserData(userData, AuditDataPublisherConstants.OVERALL_USER_DATA_EVENT_STREAM_NAME);
-            }
+            publishUserData(userData, AuditDataPublisherConstants.OVERALL_USER_DATA_EVENT_STREAM_NAME);
         } catch (UserStoreException e) {
             log.error("Error getting claims", e);
         }
